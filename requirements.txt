@@ -1,0 +1,8 @@
+streamlit>=1.36
+requests>=2.32.3
+beautifulsoup4>=4.12
+readability-lxml>=0.8.1
+ebooklib>=0.18
+lxml>=5.2
+python-slugify>=8.0
+indic-transliteration>=2.3
