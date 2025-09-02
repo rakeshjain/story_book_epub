@@ -87,7 +87,6 @@ def extract_cover_image(html: str, base_url: str) -> Optional[Tuple[str, bytes]]
         cover_candidates = []
         if DEBUG:
             st.info("Debug: Starting cover candidate collection")
-        # Look for common cover image patterns
 
         # Helpers
         def _should_skip_url(u: str) -> bool:
@@ -510,6 +509,41 @@ def extract_lessons_from_book_page(start_url: str, html: str) -> List[str]:
         seen.add(abs_link)
         found.append(abs_link)
     return found
+
+
+def extract_lesson_pairs_from_book_page(start_url: str, html: str) -> List[Tuple[str, str]]:
+    """Extract (display_name, absolute_url) pairs for lessons/topics from a book/TOC page.
+
+    - Same filtering as extract_lessons_from_book_page: only same-domain and href containing '/lessons/' or '/topics/'.
+    - Preserve order of first appearance and de-duplicate by absolute URL.
+    - Display name is normalized anchor text; falls back to URL basename if empty.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    pairs: List[Tuple[str, str]] = []
+    seen: Set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = a.get("href")
+        if not href:
+            continue
+        if "/lessons/" not in href and "/topics/" not in href:
+            continue
+        abs_link = _clean_link(start_url, href)
+        if not abs_link:
+            continue
+        if not _same_domain(start_url, abs_link):
+            continue
+        if abs_link in seen:
+            continue
+        seen.add(abs_link)
+        txt = _norm_text(a.get_text(" ", strip=True))
+        if not txt:
+            # Fallback to last path segment without query
+            try:
+                txt = os.path.basename(abs_link.split("?")[0]) or abs_link
+            except Exception:
+                txt = abs_link
+        pairs.append((txt, abs_link))
+    return pairs
 
 
 def make_epub(
@@ -1164,13 +1198,21 @@ if st.button("Pack EPUB", type="primary"):
             st.error("No links discovered. Adjust depth/filters and try again.")
             st.stop()
         st.success(f"Discovered {len(discovered)} links.")
-        st.dataframe({"links": discovered})
-        raw_urls = discovered
-        # Fetch start page html for title/author metadata
+        # Fetch start page html for title/author metadata and names
         try:
             start_html_for_meta = fetch_html(start_url)
         except Exception:
             start_html_for_meta = None
+        name_map = {}
+        if start_html_for_meta:
+            try:
+                pairs = extract_lesson_pairs_from_book_page(start_url, start_html_for_meta)
+                name_map = {url: name for (name, url) in pairs}
+            except Exception:
+                name_map = {}
+        display_names = [name_map.get(u, u) for u in discovered]
+        st.dataframe({"name": display_names, "url": discovered})
+        raw_urls = discovered
     else:
         st.warning(
             "Batch mode uses the button below. Choose Manual or Crawl for single EPUB packing."
@@ -1241,8 +1283,16 @@ if st.button("Pack EPUB", type="primary"):
 
     for i, url in enumerate(urls, start=1):
         try:
-            status.write(f"Fetching: {url}")
+            # Fetch HTML first to derive a friendly display name (Manual mode) or use crawl map
             html = fetch_html(url)
+            raw_full_title_tmp, meta_title_only_tmp, _ = parse_title_author_from_html(html)
+            display_name = (
+                raw_full_title_tmp
+                or meta_title_only_tmp
+                or (name_map.get(url) if 'name_map' in locals() else None)
+                or url
+            )
+            status.write(f"Fetching: {display_name}")
             title, content_html = extract_content(url, html)
             items.append((title, url, content_html))
         except Exception as e:
@@ -1434,7 +1484,7 @@ if mode == "Batch from Books Index" and st.button(
         if DEBUG:
             st.info(f"Debug: Processing book {b_idx}: {book_url}")
         try:
-            status.write(f"Book {b_idx}/{len(book_urls)}: {book_url}")
+            status.write(f"Book {b_idx}/{len(book_urls)}: {book_title}")
             book_html = fetch_html(book_url)
             raw_full_title, meta_title_only, meta_author = parse_title_author_from_html(
                 book_html
@@ -1495,7 +1545,12 @@ if mode == "Batch from Books Index" and st.button(
                         f"⚠️ Failed to extract cover image for '{book_title}': {e}"
                     )
 
-            # Discover chapter links from this book page
+            # Build lesson name map and discover chapter links from this book page
+            try:
+                pairs = extract_lesson_pairs_from_book_page(book_url, book_html)
+                lesson_name_map = {url: name for (name, url) in pairs}
+            except Exception:
+                lesson_name_map = {}
             lessons = extract_lessons_from_book_page(book_url, book_html)
             if not lessons:
                 st.warning(f"No chapters found for book: {book_url}")
@@ -1508,7 +1563,8 @@ if mode == "Batch from Books Index" and st.button(
             items: List[Tuple[str, str, str]] = []
             for i, chap_url in enumerate(lessons, start=1):
                 try:
-                    status.write(f"Fetching chapter {i}/{len(lessons)}: {chap_url}")
+                    display_name = lesson_name_map.get(chap_url, chap_url)
+                    status.write(f"Fetching chapter {i}/{len(lessons)}: {display_name}")
                     html = fetch_html(chap_url)
                     title, content_html = extract_content(chap_url, html)
                     items.append((title, chap_url, content_html))
