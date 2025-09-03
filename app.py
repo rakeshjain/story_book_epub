@@ -63,14 +63,60 @@ def fetch_html(url: str) -> str:
     """Download a URL and return the decoded HTML text.
 
     - Uses a desktop browser User-Agent to avoid basic bot-blocks
-    - Raises for HTTP errors (requests raises on non-2xx)
+    - Retries on HTTP 429 using Retry-After header when available
+    - Retries transient 5xx errors and network exceptions with exponential backoff
     - Sets encoding to apparent_encoding to preserve Bangla text correctly
     - Cached by Streamlit within a session to avoid repeated network calls
     """
-    resp = requests.get(url, headers=SESSION_HEADERS, timeout=30)
-    resp.raise_for_status()
-    resp.encoding = resp.apparent_encoding or resp.encoding
-    return resp.text
+    def _parse_retry_after(val: Optional[str]) -> float:
+        if not val:
+            return 0.0
+        try:
+            # integer seconds
+            return max(0.0, float(val.strip()))
+        except Exception:
+            pass
+        # HTTP-date
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        try:
+            dt = parsedate_to_datetime(val)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            return max(0.0, (dt - now).total_seconds())
+        except Exception:
+            return 0.0
+
+    attempt = 0
+    backoff = 1.0
+    last_exc: Optional[Exception] = None
+    while attempt <= 3:
+        try:
+            resp = requests.get(url, headers=SESSION_HEADERS, timeout=30)
+            if resp.status_code == 429:
+                retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
+                wait_s = retry_after if retry_after > 0 else min(60.0, backoff)
+                time.sleep(wait_s)
+                attempt += 1
+                backoff *= 2
+                continue
+            if 500 <= resp.status_code < 600:
+                time.sleep(min(30.0, backoff))
+                attempt += 1
+                backoff *= 2
+                continue
+            resp.raise_for_status()
+            resp.encoding = resp.apparent_encoding or resp.encoding
+            return resp.text
+        except requests.RequestException as e:
+            last_exc = e
+            time.sleep(min(30.0, backoff))
+            attempt += 1
+            backoff *= 2
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("HTTP request failed after retries")
 
 
 def extract_cover_image(html: str, base_url: str) -> Optional[Tuple[str, bytes]]:
