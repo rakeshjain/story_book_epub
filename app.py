@@ -535,7 +535,7 @@ def extract_lesson_pairs_from_book_page(start_url: str, html: str) -> List[Tuple
         if abs_link in seen:
             continue
         seen.add(abs_link)
-        txt = _norm_text(a.get_text(" ", strip=True))
+        txt = (a.get_text(" ", strip=True) or "").strip()
         if not txt:
             # Fallback to last path segment without query
             try:
@@ -859,6 +859,18 @@ def _clean_link(base_url: str, href: str) -> Optional[str]:
 def _same_domain(u1: str, u2: str) -> bool:
     """Check if two URLs share the same network location (host:port)."""
     return urlparse(u1).netloc == urlparse(u2).netloc
+
+# New helper: derive a friendly name from URL path when no title/name available
+def pretty_display_name_from_url(u: str) -> str:
+    try:
+        p = urlparse(u)
+        path = (p.path or "/").rstrip("/")
+        seg = path.split("/")[-1]
+        seg = unquote(seg)
+        seg = seg.replace("-", " ").replace("_", " ").strip()
+        return seg or u
+    except Exception:
+        return u
 
 
 def discover_links(
@@ -1210,7 +1222,7 @@ if st.button("Pack EPUB", type="primary"):
                 name_map = {url: name for (name, url) in pairs}
             except Exception:
                 name_map = {}
-        display_names = [name_map.get(u, u) for u in discovered]
+        display_names = [name_map.get(u) or pretty_display_name_from_url(u) for u in discovered]
         st.dataframe({"name": display_names, "url": discovered})
         raw_urls = discovered
     else:
@@ -1290,7 +1302,7 @@ if st.button("Pack EPUB", type="primary"):
                 raw_full_title_tmp
                 or meta_title_only_tmp
                 or (name_map.get(url) if 'name_map' in locals() else None)
-                or url
+                or pretty_display_name_from_url(url)
             )
             status.write(f"Fetching: {display_name}")
             title, content_html = extract_content(url, html)
@@ -1473,7 +1485,17 @@ if mode == "Batch from Books Index" and st.button(
         st.stop()
 
     st.success(f"Discovered {len(book_urls)} book(s).")
-    st.dataframe({"books": book_urls})
+    with st.spinner("Resolving book titles…"):
+        book_titles: List[str] = []
+        for bu in book_urls:
+            try:
+                bh = fetch_html(bu)
+                rf, to, _ = parse_title_author_from_html(bh)
+                nm = rf or to or pretty_display_name_from_url(bu)
+            except Exception:
+                nm = pretty_display_name_from_url(bu)
+            book_titles.append(nm)
+    st.dataframe({"title": book_titles, "url": book_urls})
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     overall = st.progress(0)
@@ -1563,7 +1585,7 @@ if mode == "Batch from Books Index" and st.button(
             items: List[Tuple[str, str, str]] = []
             for i, chap_url in enumerate(lessons, start=1):
                 try:
-                    display_name = lesson_name_map.get(chap_url, chap_url)
+                    display_name = lesson_name_map.get(chap_url) or pretty_display_name_from_url(chap_url)
                     status.write(f"Fetching chapter {i}/{len(lessons)}: {display_name}")
                     html = fetch_html(chap_url)
                     title, content_html = extract_content(chap_url, html)

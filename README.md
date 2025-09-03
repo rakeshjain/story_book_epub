@@ -10,6 +10,7 @@ Pack Bengali articles/books from `ebanglalibrary.com` into EPUB files for offlin
 - Request delay control in minutes (0–10) for polite crawling
 - Clean content extraction (readability if available, with robust fallbacks)
 - Cover image extraction: Automatically attempts to find and include a suitable cover image from title or early content sections; filters out logos, icons, and other non-content images
+- Improved naming: Chapters now display human-readable names derived from page metadata or URL patterns instead of raw URLs
 - EPUBs saved to `output/`
 
 ## Quick Start
@@ -62,11 +63,13 @@ Note: There is currently no manual URL override or image quality selector in the
 ### Manual URLs
 - Sidebar → Mode: "Manual URLs"
 - Paste article links (one per line)
+- Chapter names will be automatically resolved using article titles or URL-derived display names
 - Click "Pack EPUB"
 
 ### Crawl from URL
 - Sidebar → Mode: "Crawl from URL"
 - Enter a start/TOC URL (on ebanglalibrary.com)
+- Discovered chapters show friendly names from table of contents or URL patterns
 - Set "Crawl depth" (0 = just page links, 1–3 = follow discovered pages)
 - Set "Max pages" to cap crawling
 - Optional regex filters (Include/Exclude)
@@ -75,6 +78,7 @@ Note: There is currently no manual URL override or image quality selector in the
 ### Batch from Books/Authors index (one EPUB per book)
 - Sidebar → Mode: "Batch from Books Index"
 - Index type: choose "Books index" or "Authors index"
+- Books list shows resolved titles instead of raw URLs
 - If Authors index: optionally enter an author slug (e.g., `rabindranath-tagore`) to crawl only `/authors/<slug>/`
 - Index URL: auto-filled based on your choice, but editable
 - Set limits: "Max index pages", "Max books", "Max chapters per book"
